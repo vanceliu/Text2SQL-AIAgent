@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/APP AIoT應用開發課PDF檔20260529.pdf
+
+# Project specific
+output/
+data/supermarket.db
+data/checkpoints.db*
+.idea
