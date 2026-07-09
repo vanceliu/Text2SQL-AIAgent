@@ -27,10 +27,11 @@ Gemma 4 E4B 內建函式呼叫（Function Calling）支援，LM Studio 的 OpenA
 - 以 Pydantic BaseModel 定義 tool schema，提供型別安全與欄位驗證
 - 保留 fallback 邏輯（文字解析 / 規則引擎），確保 FC 不穩定時仍能運作
 
-三個使用 FC 的節點：
+四個使用 FC 的節點：
 - **Intent Parser** → `IntentResult` schema（意圖類型 + 實體提取）
 - **Text2SQL** → `SQLGenerationResult` schema（SQL 語句 + 說明）
 - **Response Router** → `ResponseFormatResult` schema（格式決策 + 理由）
+- **Response Composer** → `ComposerResult` schema（最終口語化回覆文字）
 
 ## 二、LangGraph 工作流設計
 
@@ -153,10 +154,11 @@ START
 
 ### 7. Response Composer（回覆組合）
 - 輸入：查詢結果 + 格式決策 + 使用者問題
-- 處理：LLM 生成口語回覆（few-shot prompt）+ 圖表生成（若需要）
+- 處理：透過 Function Calling（`ComposerResult` schema）組合口語回覆 + 圖表生成（若需要）
 - 輸出：最終文字回覆 + 圖表路徑
 - 特點：
-  - 使用 few-shot examples 確保 LLM 直接輸出最終回覆（避免 thinking 外洩）
+  - 使用 `bind_tools([ComposerResult], tool_choice="any")` 強制 LLM 將回覆放入 tool_calls，避免 Gemma 4 thinking 外洩到 content
+  - 若 FC 未觸發，fallback 從 content 末尾提取連續中文段落（跳過英文推理過程）
   - 一律包含口語文字，圖表/表格為附加
 
 ## 四、回覆格式決策邏輯
@@ -199,7 +201,7 @@ graph.invoke({"messages": [HumanMessage(content="...")]}, config)
 
 當 `total_tokens_used` 超過 6000 tokens 門檻時：
 1. 從最新的 messages 往回保留約 3000 tokens
-2. 將更早的 messages 壓縮為一段摘要（由 LLM 生成，100 字以內）
+2. 將更早的 messages 壓縮為一段摘要（由 LLM 生成，300 字以內）
 3. 壓縮結果**僅用於送給 LLM 的上下文**，不影響 checkpointer 中的原始歷史
 4. 確保 LLM 推論效能不隨對話輪次增加而劣化
 
@@ -229,7 +231,7 @@ graph.invoke({"messages": [HumanMessage(content="...")]}, config)
 | 挑戰 | 解決方案 |
 |------|---------|
 | 地端模型 SQL 生成品質 | Schema 資訊注入（含範例值）+ Function Calling 結構化輸出 + 重試機制 |
-| Gemma 4 thinking mode 外洩 | 全節點改用 Function Calling（bind_tools + tool_choice="any"），從 tool_calls 取值避免 content 中的推理外洩 |
+| Gemma 4 thinking mode 外洩 | 全節點（含 Response Composer）統一使用 Function Calling（bind_tools + tool_choice="any"），從 tool_calls 取值避免 content 中的推理外洩；Response Composer 額外有中文段落提取的 fallback |
 | 多輪對話 context 膨脹 | token 門檻（6000）觸發歷史壓縮摘要，不影響 checkpointer 原始資料 |
 | 回覆格式決策準確性 | LLM Function Calling 主判斷 + 規則引擎 fallback 雙層決策 |
 | 對話歷史持久化 | SqliteSaver checkpointer，程式重啟後可恢復任何 session |
